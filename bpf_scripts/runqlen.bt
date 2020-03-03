@@ -1,0 +1,65 @@
+#! /usr/bin/env bpftrace
+
+/*
+ * Trace CPU scheduler run queue length
+ *
+ * This script uses currently running tasks to find the CFS runqueue of the
+ * task. This may give wrong output if the currently running tasks is contained
+ * in the cgroup hierarchy.
+ *
+ * For e.g.
+ * - cgcreate -g cpu:/grp1 &&  cgexec -g cpu:grp1 taskset -c 0 <workload>
+ * - cgcreate -g cpu:/grp1/grp2 &&  cgexec -g cpu:grp1/grp2 taskset -c 0 <workload>
+ *
+ * Sample Output:
+ * ==============
+ *
+ * @[0]:
+ * [4, 5)                 2 |                                                    |
+ * [5, 6)                 2 |                                                    |
+ * [6, 7)               707 |@@@@                                                |
+ * [7, 8)                10 |                                                    |
+ * [8, 9)                 0 |                                                    |
+ * [9, 10)                0 |                                                    |
+ * [10, 11)               0 |                                                    |
+ * [11, 12)               0 |                                                    |
+ * [12, 13)               0 |                                                    |
+ * [13, 14)               0 |                                                    |
+ * [14, 15)               0 |                                                    |
+ * [15, 16)               0 |                                                    |
+ * [16, 17)               5 |                                                    |
+ * [17, 18)               4 |                                                    |
+ * [18, 19)               5 |                                                    |
+ * [19, 20)               5 |                                                    |
+ * [20, 21)            8918 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+ * [21, 22)             244 |@                                                   |
+ *
+ * where @[0] represents output for CPU0
+ * [N,m) represents the count of h_nr_running = N
+ * histogram represents the count of [N,m) when (h_nr_running == N)
+ *
+ * Using cgroup screws the values. Hence the use of h_nr_running *may* give
+ * correct behavior in this case, where the most count approximately represents
+ * the correct value when the cgroup hierarchy is limited to <=2.
+ *
+ * Note: Change filter "/cpu>=0/ to the required value"
+ * 	 Change exit timeout. Default is 10s. Or remove "interval:s:10" to make
+ *       program exit on Ctrl-C
+ *
+ * Note: cur_linux_cfs_rq.h can be generated using the script available at
+ * https://github.ibm.com/pshah015/scheduler-benchmarks/blob/master/general/get_preprocessed.sh
+ */
+
+#include <linux/sched.h>
+#include "cur_linux_cfs_rq.h"
+
+profile:hz:99
+/cpu>=0/
+{
+	$task = (struct task_struct *)curtask;
+	$myse = (struct cfs_rq *)$task->se.cfs_rq;
+	/* Store the h_nr_running in a map */
+	@[cpu] = lhist($myse->h_nr_running, 0, 1000, 1);
+}
+
+interval:s:10 { exit(); }
