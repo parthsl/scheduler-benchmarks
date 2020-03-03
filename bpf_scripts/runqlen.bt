@@ -59,7 +59,8 @@ profile:hz:99
 	$task = (struct task_struct *)curtask;
 	$myse = (struct cfs_rq *)$task->se.cfs_rq;
 	/* Store the h_nr_running in a map */
-	@[cpu] = lhist($myse->h_nr_running, 0, 1000, 1);
+	@percpu[cpu] = lhist($myse->h_nr_running, 0, 1000, 1);
+	@summary = lhist($myse->h_nr_running, 0, 1000, 1);
 }
 
 interval:s:10 { exit(); }
