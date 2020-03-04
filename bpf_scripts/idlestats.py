@@ -27,13 +27,9 @@ bpf_text = """
 
 BPF_HASH(tss, int, u64);
 BPF_HASH(latency, int, u64);
+BPF_HASH(total_idle_time, int, u64);
 
 BPF_HISTOGRAM(entrycount, int);
-
-struct data_t {
-    int cpu_id;
-    u64 ts;
-};
 
 BPF_HISTOGRAM(idletime, u64);
 
@@ -55,7 +51,9 @@ TRACEPOINT_PROBE(power, cpu_idle)
     // Exiting IDLE
     else {
         u64 *tsp, delta;
-        u64 *latencyp = latency.lookup(&cpu_id);
+        u64 *past_latency = latency.lookup(&cpu_id);
+        u64 *tit = total_idle_time.lookup(&cpu_id);
+
         tsp = tss.lookup(&cpu_id);
         if (tsp == 0) {
             return 0; // missed IDLE enter
@@ -64,11 +62,21 @@ TRACEPOINT_PROBE(power, cpu_idle)
         delta = (bpf_ktime_get_ns() / 1000000) - *tsp;
 
         // Add past latency
-        // if ( latencyp) delta = delta + *latencyp;
+        // if ( past_latency) delta = delta + *past_latency;
 
         latency.update(&cpu_id, &delta);
 
         idletime.increment(bpf_log2l(delta));
+
+        if (!tit) {
+            u64 tmp = 0;
+            total_idle_time.update(&cpu_id, &tmp);
+            tit = total_idle_time.lookup(&cpu_id);
+        }
+        if (tit) {
+        *tit = delta + *tit;
+        total_idle_time.update(&cpu_id, tit);
+        }
 
         tss.delete(&cpu_id);
     }
@@ -85,8 +93,8 @@ print("Tracing CPUIDLE latency for CPU-"+ str(args.cpu)+"... Hit Ctrl-C to end."
 
 # output
 entrycount = b.get_table("entrycount")
-
 residency = b.get_table("idletime")
+total_idle_time = b.get_table("total_idle_time")
 
 import os
 from multiprocessing import Process
@@ -111,10 +119,13 @@ if (1):
     try:
         sleep(int(args.time))
     except KeyboardInterrupt:
-        exiting = 1
+        pass
 
     entrycount.print_linear_hist("State entered\t")
     entrycount.clear()
 
     residency.print_log2_hist("Idle time (in ms) \t")
     residency.clear()
+
+    for k,v in total_idle_time.items():
+        print("Summary: CPU-",k.value," IDLE time = ",v.value,"ms")
