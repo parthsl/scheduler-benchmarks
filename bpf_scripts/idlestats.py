@@ -1,6 +1,33 @@
 # BPF python script to trace CPUIDLE events for a givne CPU
 #
 # @author: parth@linux.ibm.com
+#
+# Sample output:
+# ==============
+# Tracing CPUIDLE latency for CPU-[4-6]... Hit Ctrl-C to end.
+#      State entered       : count     distribution
+#         0          : 0        |                                        |
+#         1          : 0        |                                        |
+#         2          : 0        |                                        |
+#         3          : 0        |                                        |
+#         4          : 5        |****************                        |
+#         5          : 1        |***                                     |
+#         6          : 12       |****************************************|
+#      Idle time (in ms)   : count     distribution
+#          0 -> 1          : 1        |**********                              |
+#          2 -> 3          : 0        |                                        |
+#          4 -> 7          : 4        |****************************************|
+#          8 -> 15         : 0        |                                        |
+#         16 -> 31         : 1        |**********                              |
+#         32 -> 63         : 0        |                                        |
+#         64 -> 127        : 0        |                                        |
+#        128 -> 255        : 1        |**********                              |
+#        256 -> 511        : 3        |******************************          |
+#        512 -> 1023       : 1        |**********                              |
+#       1024 -> 2047       : 2        |********************                    |
+# Summary: CPU- 4  IDLE time =  305 ms
+# Summary: CPU- 6  IDLE time =  305 ms
+# Summary: CPU- 5  IDLE time =  5015 ms
 
 from __future__ import print_function
 from bcc import BPF
@@ -12,6 +39,7 @@ examples = """examples
     ./idleinfo.py -t 5  # Run for 5 Sec
     ./idleinfo.py -c 1  # Trace CPU-1. Defaults to CPU-0
     ./idleinfo.py -a    # Stats for all the CPUs
+    ./idleinfo.py -r 3-9# Stats for CPUs from 3 to 9
 """
 
 parser = argparse.ArgumentParser(
@@ -20,6 +48,7 @@ parser = argparse.ArgumentParser(
         epilog=examples)
 parser.add_argument("-t", "--time", default=5, help="add timer")
 parser.add_argument("-c", "--cpu",  default=0, help="add CPU")
+parser.add_argument("-r", "--range",  nargs='?', default=0, help="add CPU range")
 parser.add_argument("-a", "--all", default=0, action="store_const", const=1, help="All CPUs")
 args = parser.parse_args()
 
@@ -88,19 +117,38 @@ TRACEPOINT_PROBE(power, cpu_idle)
 }
 """
 
+range_filter = False
+all_cpus = False
+
 cpu_filter = 'cpu_id != '+str(args.cpu)
+if(args.range):
+    rstart = args.range.split('-')
+    if (len(rstart)==1):
+        rstart = args.range.split(',')
+    rend = int(rstart[-1])
+    rstart = int(rstart[0])
+
+    if (rstart <= rend):
+        range_filter = True
+        cpu_filter = '(cpu_id < '+str(rstart)+' || cpu_id > '+str(rend)+')'
+
 bpf_text = bpf_text.replace('FILTER', cpu_filter)
+
+
 if (args.all == 0 ):
     bpf_text = bpf_text.replace('ALLCPU', '1')
 else:
     bpf_text = bpf_text.replace('ALLCPU', '0')
+    all_cpus = True
 
 b = BPF(text=bpf_text)
 
-if(args.all):
-    print("Tracing CPUIDLE latency for CPU-"+ str(args.cpu)+"... Hit Ctrl-C to end.")
-else:
+if(all_cpus):
     print("Tracing CPUIDLE latency for all CPUs... Hit Ctrl-C to end.")
+elif(range_filter):
+    print("Tracing CPUIDLE latency for CPU-["+str(rstart)+"-"+str(rend)+"]... Hit Ctrl-C to end.")
+else:
+    print("Tracing CPUIDLE latency for CPU-"+ str(args.cpu)+"... Hit Ctrl-C to end.")
 
 # output
 entrycount = b.get_table("entrycount")
