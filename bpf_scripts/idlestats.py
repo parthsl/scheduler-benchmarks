@@ -11,6 +11,7 @@ examples = """examples
     ./idleinfo.py       # Ctrl-C to Quit
     ./idleinfo.py -t 5  # Run for 5 Sec
     ./idleinfo.py -c 1  # Trace CPU-1. Defaults to CPU-0
+    ./idleinfo.py -a    # Stats for all the CPUs
 """
 
 parser = argparse.ArgumentParser(
@@ -19,6 +20,7 @@ parser = argparse.ArgumentParser(
         epilog=examples)
 parser.add_argument("-t", "--time", default=5, help="add timer")
 parser.add_argument("-c", "--cpu",  default=0, help="add CPU")
+parser.add_argument("-a", "--all", default=0, action="store_const", const=1, help="All CPUs")
 args = parser.parse_args()
 
 # define BPF program
@@ -37,15 +39,16 @@ TRACEPOINT_PROBE(power, cpu_idle)
 {
     u32 state = args->state;
     int cpu_id = args->cpu_id;
+    int zero = 0;
 
-    if (FILTER) return 0;
+    if (ALLCPU && FILTER) return 0;
 
     // entering IDLE.
     if (state > 0 && state < 10 ) { //Hack workaround
         entrycount.increment(state);
 
         u64 ts = bpf_ktime_get_ns() / 1000000;
-        tss.update(&cpu_id, &ts);
+        tss.update(&zero, &ts);
     }
 
     // Exiting IDLE
@@ -54,7 +57,7 @@ TRACEPOINT_PROBE(power, cpu_idle)
         u64 *past_latency = latency.lookup(&cpu_id);
         u64 *tit = total_idle_time.lookup(&cpu_id);
 
-        tsp = tss.lookup(&cpu_id);
+        tsp = tss.lookup(&zero);
         if (tsp == 0) {
             return 0; // missed IDLE enter
         }
@@ -78,7 +81,7 @@ TRACEPOINT_PROBE(power, cpu_idle)
         total_idle_time.update(&cpu_id, tit);
         }
 
-        tss.delete(&cpu_id);
+        tss.delete(&zero);
     }
     
     return 0;
@@ -87,9 +90,17 @@ TRACEPOINT_PROBE(power, cpu_idle)
 
 cpu_filter = 'cpu_id != '+str(args.cpu)
 bpf_text = bpf_text.replace('FILTER', cpu_filter)
+if (args.all == 0 ):
+    bpf_text = bpf_text.replace('ALLCPU', '1')
+else:
+    bpf_text = bpf_text.replace('ALLCPU', '0')
+
 b = BPF(text=bpf_text)
 
-print("Tracing CPUIDLE latency for CPU-"+ str(args.cpu)+"... Hit Ctrl-C to end.")
+if(args.all):
+    print("Tracing CPUIDLE latency for CPU-"+ str(args.cpu)+"... Hit Ctrl-C to end.")
+else:
+    print("Tracing CPUIDLE latency for all CPUs... Hit Ctrl-C to end.")
 
 # output
 entrycount = b.get_table("entrycount")
