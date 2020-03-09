@@ -4,37 +4,6 @@
 # meet target residency time, useful to compare CPUIDLE governors.
 #
 # @author: parth@linux.ibm.com
-#
-# Sample output:
-# ==============
-# $> python cpuidle_mispredict.py -a
-# Tracing CPUIDLE mis-predictions for all CPUs... Hit Ctrl-C to end.
-#      State entered       : count     distribution
-#         0          : 0        |                                        |
-#         1          : 1        |                                        |
-#         2          : 1        |                                        |
-#         3          : 4        |                                        |
-#         4          : 680      |****************************************|
-#         5          : 2        |                                        |
-#         6          : 366      |*********************                   |
-#      Mis-predicted Time (in us)  : count     distribution
-#          0 -> 1          : 0        |                                        |
-#          2 -> 3          : 1        |                                        |
-#          4 -> 7          : 1        |                                        |
-#          8 -> 15         : 0        |                                        |
-#         16 -> 31         : 1        |                                        |
-#         32 -> 63         : 4        |                                        |
-#         64 -> 127        : 40       |*********                               |
-#        128 -> 255        : 0        |                                        |
-#        256 -> 511        : 0        |                                        |
-#        512 -> 1023       : 1        |                                        |
-#       1024 -> 2047       : 0        |                                        |
-#       2048 -> 4095       : 3        |                                        |
-#       4096 -> 8191       : 4        |                                        |
-#       8192 -> 16383      : 29       |*******                                 |
-#      16384 -> 32767      : 161      |****************************************|
-# Total correct predictions:  482
-# Total mis-predictions:  245
 
 from __future__ import print_function
 from bcc import BPF
@@ -70,6 +39,13 @@ BPF_HISTOGRAM(entrycount, int);
 BPF_HISTOGRAM(missed_by, u64);
 BPF_HASH(correct_prediction, int, int);
 
+struct struct_idle_t {
+    s32 stated;
+    long long int deltad;
+};
+
+BPF_HISTOGRAM(delta_t, struct struct_idle_t);
+
 TRACEPOINT_PROBE(power, cpu_idle)
 {
     u32 state = args->state;
@@ -82,10 +58,12 @@ TRACEPOINT_PROBE(power, cpu_idle)
 
     // entering IDLE.
     if (state > 0 && state < 10 ) { //Hack workaround
+        u64 ts;
+
         entrycount.increment(state);
         state_entered.update(&cpu_id, &state);
 
-        u64 ts = bpf_ktime_get_ns() / 1000;
+        ts = bpf_ktime_get_ns() / 1000;
         tss.update(&zero, &ts);
     }
 
@@ -104,6 +82,9 @@ TRACEPOINT_PROBE(power, cpu_idle)
         if (se != 0) {
             int index = *se;
             u64 expected;
+            long long int difftime = 0;
+            struct struct_idle_t slot = {.stated = 0, .deltad=0};
+            int *var;
 
             /*
              Since BPF don't allow reading read-only struct with a variable
@@ -124,19 +105,26 @@ TRACEPOINT_PROBE(power, cpu_idle)
                 case 9: expected = TR9; break;
             }
                 
-            if ( delta < expected ) {
+
+            if ( delta < expected ) { // less time spent: undershoot
                 missed_time = expected - delta;
                 missed_by.increment(bpf_log2l(missed_time));
 
-                int *var = correct_prediction.lookup_or_try_init(&one, &zero);
+                var = correct_prediction.lookup_or_try_init(&one, &zero);
                 if (var)
                     correct_prediction.increment(one);
 
             }
-            else {
-                int *var = correct_prediction.lookup_or_try_init(&zero, &zero);
+            else { // more time spent; overshoot
+                var = correct_prediction.lookup_or_try_init(&zero, &zero);
                 if (var)
                     correct_prediction.increment(zero);
+
+                difftime = (long long int)((long long int)delta - (long long int)expected);
+                slot.stated = index;
+                slot.deltad = bpf_log2l(difftime);
+
+                delta_t.increment(slot);
             }
         }
 
@@ -208,6 +196,8 @@ miss_by_time = b.get_table("missed_by")
 
 correct_prediction_count = b.get_table("correct_prediction")
 
+idle_delta = b.get_table("delta_t")
+
 from multiprocessing import Process
 
 def create_small_load():
@@ -245,3 +235,5 @@ if (1):
         print("Total mis-predictions: ", v.value)
     except IndexError:
         pass
+
+    idle_delta.print_log2_hist("states overshooted by\t")
