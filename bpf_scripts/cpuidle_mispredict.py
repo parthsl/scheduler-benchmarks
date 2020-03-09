@@ -70,6 +70,13 @@ BPF_HISTOGRAM(entrycount, int);
 BPF_HISTOGRAM(missed_by, u64);
 BPF_HASH(correct_prediction, int, int);
 
+struct struct_idle_t {
+    s32 stated;
+    long long int deltad;
+};
+
+BPF_HISTOGRAM(delta_t, struct struct_idle_t);
+
 TRACEPOINT_PROBE(power, cpu_idle)
 {
     u32 state = args->state;
@@ -82,10 +89,12 @@ TRACEPOINT_PROBE(power, cpu_idle)
 
     // entering IDLE.
     if (state > 0 && state < 10 ) { //Hack workaround
+        u64 ts;
+
         entrycount.increment(state);
         state_entered.update(&cpu_id, &state);
 
-        u64 ts = bpf_ktime_get_ns() / 1000;
+        ts = bpf_ktime_get_ns() / 1000;
         tss.update(&zero, &ts);
     }
 
@@ -104,6 +113,9 @@ TRACEPOINT_PROBE(power, cpu_idle)
         if (se != 0) {
             int index = *se;
             u64 expected;
+            long long int difftime = 0;
+            struct struct_idle_t slot = {.stated = 0, .deltad=0};
+            int *var;
 
             /*
              Since BPF don't allow reading read-only struct with a variable
@@ -124,19 +136,25 @@ TRACEPOINT_PROBE(power, cpu_idle)
                 case 9: expected = TR9; break;
             }
                 
-            if ( delta < expected ) {
+            if ( delta < expected ) { // less time spent: undershoot
                 missed_time = expected - delta;
                 missed_by.increment(bpf_log2l(missed_time));
 
-                int *var = correct_prediction.lookup_or_try_init(&one, &zero);
+                var = correct_prediction.lookup_or_try_init(&one, &zero);
                 if (var)
                     correct_prediction.increment(one);
 
             }
-            else {
-                int *var = correct_prediction.lookup_or_try_init(&zero, &zero);
+            else { // more time spent; overshoot
+                var = correct_prediction.lookup_or_try_init(&zero, &zero);
                 if (var)
                     correct_prediction.increment(zero);
+
+                difftime = (long long int)((long long int)delta - (long long int)expected);
+                slot.stated = index;
+                slot.deltad = bpf_log2l(difftime);
+
+                delta_t.increment(slot);
             }
         }
 
@@ -208,6 +226,8 @@ miss_by_time = b.get_table("missed_by")
 
 correct_prediction_count = b.get_table("correct_prediction")
 
+idle_delta = b.get_table("delta_t")
+
 from multiprocessing import Process
 
 def create_small_load():
@@ -245,3 +265,5 @@ if (1):
         print("Total mis-predictions: ", v.value)
     except IndexError:
         pass
+
+    idle_delta.print_log2_hist("states overshooted by\t")
