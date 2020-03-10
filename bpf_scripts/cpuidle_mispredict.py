@@ -97,6 +97,7 @@ parser.add_argument("-c", "--cpu",  default=0, help="add CPU")
 parser.add_argument("-r", "--range",  nargs='?', default=0, help="add CPU range")
 parser.add_argument("-a", "--all", default=0, action="store_const", const=1, help="All CPUs")
 parser.add_argument("-o", "--overshoot", default=0, action="store_const", const=1, help="Overshoot statistics")
+parser.add_argument("-d", "--debug", default=0, action="store_const", const=1, help="Debug info using trace_printk")
 args = parser.parse_args()
 
 # define BPF program
@@ -240,10 +241,15 @@ if (index < 6) {
                     }
                     if ( delta >= expected ) {
                         cp_increment(OVERSHOOT_MISPREDICTION);
-                        bpf_trace_printk("state %d diff %ld N_expected = %lld\\n", index, delta, expected);
+                        OSH2
                     }
                 }
 '''
+
+if (args.debug):
+    overshoot_hooks2 = overshoot_hooks2.replace('OSH2', 'bpf_trace_printk("state %d diff %ld N_expected = %lld\\n", index, delta, expected);')
+else:
+    overshoot_hooks2 = overshoot_hooks2.replace('OSH2','')
 
 range_filter = False
 all_cpus = False
