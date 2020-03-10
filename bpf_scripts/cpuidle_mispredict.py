@@ -5,36 +5,75 @@
 #
 # @author: parth@linux.ibm.com
 #
-# Sample output:
-# ==============
-# $> python cpuidle_mispredict.py -a
-# Tracing CPUIDLE mis-predictions for all CPUs... Hit Ctrl-C to end.
+# Example:
+# =========
+# $> python cpuidle_mispredict.py -c 0 -t 2 -o
+# Tracing CPUIDLE mis-predictions for CPU-0... Hit Ctrl-C to end.
 #      State entered       : count     distribution
 #         0          : 0        |                                        |
-#         1          : 1        |                                        |
-#         2          : 1        |                                        |
-#         3          : 4        |                                        |
-#         4          : 680      |****************************************|
-#         5          : 2        |                                        |
-#         6          : 366      |*********************                   |
-#      Mis-predicted Time (in us)  : count     distribution
+#         1          : 0        |                                        |
+#         2          : 0        |                                        |
+#         3          : 0        |                                        |
+#         4          : 13       |****************************************|
+#         5          : 2        |******                                  |
+#         6          : 13       |****************************************|
+# Total correct predictions:  27
+# Total undershoot mis-predictions:  0
+# Total overshoot mis-predictions:  2
+#
+# Bucket ptr = 4
+#      overshooted delta (usec)    : count     distribution
 #          0 -> 1          : 0        |                                        |
-#          2 -> 3          : 1        |                                        |
-#          4 -> 7          : 1        |                                        |
+#          2 -> 3          : 0        |                                        |
+#          4 -> 7          : 0        |                                        |
 #          8 -> 15         : 0        |                                        |
-#         16 -> 31         : 1        |                                        |
-#         32 -> 63         : 4        |                                        |
-#         64 -> 127        : 40       |*********                               |
+#         16 -> 31         : 0        |                                        |
+#         32 -> 63         : 0        |                                        |
+#         64 -> 127        : 0        |                                        |
 #        128 -> 255        : 0        |                                        |
 #        256 -> 511        : 0        |                                        |
-#        512 -> 1023       : 1        |                                        |
+#        512 -> 1023       : 0        |                                        |
+#       1024 -> 2047       : 2        |*******                                 |
+#       2048 -> 4095       : 11       |****************************************|
+#
+# Bucket ptr = 5
+#      overshooted delta (usec)    : count     distribution
+#          0 -> 1          : 0        |                                        |
+#          2 -> 3          : 0        |                                        |
+#          4 -> 7          : 0        |                                        |
+#          8 -> 15         : 0        |                                        |
+#         16 -> 31         : 0        |                                        |
+#         32 -> 63         : 0        |                                        |
+#         64 -> 127        : 0        |                                        |
+#        128 -> 255        : 0        |                                        |
+#        256 -> 511        : 0        |                                        |
+#        512 -> 1023       : 0        |                                        |
 #       1024 -> 2047       : 0        |                                        |
-#       2048 -> 4095       : 3        |                                        |
-#       4096 -> 8191       : 4        |                                        |
-#       8192 -> 16383      : 29       |*******                                 |
-#      16384 -> 32767      : 161      |****************************************|
-# Total correct predictions:  482
-# Total mis-predictions:  245
+#       2048 -> 4095       : 0        |                                        |
+#       4096 -> 8191       : 0        |                                        |
+#       8192 -> 16383      : 2        |****************************************|
+#
+# Bucket ptr = 6
+#      overshooted delta (usec)    : count     distribution
+#          0 -> 1          : 0        |                                        |
+#          2 -> 3          : 0        |                                        |
+#          4 -> 7          : 0        |                                        |
+#          8 -> 15         : 0        |                                        |
+#         16 -> 31         : 0        |                                        |
+#         32 -> 63         : 0        |                                        |
+#         64 -> 127        : 0        |                                        |
+#        128 -> 255        : 0        |                                        |
+#        256 -> 511        : 0        |                                        |
+#        512 -> 1023       : 0        |                                        |
+#       1024 -> 2047       : 0        |                                        |
+#       2048 -> 4095       : 0        |                                        |
+#       4096 -> 8191       : 0        |                                        |
+#       8192 -> 16383      : 0        |                                        |
+#      16384 -> 32767      : 1        |*****                                   |
+#      32768 -> 65535      : 2        |***********                             |
+#      65536 -> 131071     : 2        |***********                             |
+#     131072 -> 262143     : 7        |****************************************|
+#
 
 from __future__ import print_function
 from bcc import BPF
@@ -57,6 +96,7 @@ parser.add_argument("-t", "--time", default=5, help="add timer")
 parser.add_argument("-c", "--cpu",  default=0, help="add CPU")
 parser.add_argument("-r", "--range",  nargs='?', default=0, help="add CPU range")
 parser.add_argument("-a", "--all", default=0, action="store_const", const=1, help="All CPUs")
+parser.add_argument("-o", "--overshoot", default=0, action="store_const", const=1, help="Overshoot statistics")
 args = parser.parse_args()
 
 # define BPF program
@@ -72,7 +112,7 @@ BPF_HISTOGRAM(missed_by, u64);
 enum pred_type {
     OVERSHOOT = 1,
     UNDERSHOOT,
-    OVERSHOOT_MISPREDICTION,
+    OVERSHOOT_HOOKS1
     PT_MAX_STATS
 };
 
@@ -89,7 +129,7 @@ struct struct_idle_t {
     long long int deltad;
 };
 
-BPF_HISTOGRAM(delta_t, struct struct_idle_t);
+OVERSHOOT_STORAGE
 
 TRACEPOINT_PROBE(power, cpu_idle)
 {
@@ -102,7 +142,7 @@ TRACEPOINT_PROBE(power, cpu_idle)
     if (ALLCPU && FILTER) return 0;
 
     // entering IDLE.
-    if (state > 0 && state < 10 ) { //Hack workaround
+    if ((s32)state > 0) { //Hack workaround
         u64 ts;
 
         entrycount.increment(state);
@@ -135,7 +175,7 @@ TRACEPOINT_PROBE(power, cpu_idle)
              Since BPF don't allow reading read-only struct with a variable
              i.e., for u64 _TR[10] = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90};
              Accessing like _TR[index] will throw error 108
-             Hence use vague method like below to not allow random array acess
+             Hence use vague method like below to not allow random array access
              */
             switch (index) {
                 case 0: expected = TR0; break;
@@ -160,13 +200,30 @@ TRACEPOINT_PROBE(power, cpu_idle)
             else { // more time spent; overshoot
                 cp_increment(OVERSHOOT);
 
+                OVERSHOOT_HOOKS0
+                OVERSHOOT_HOOKS2
+            }
+        }
+
+        tss.delete(&zero);
+    }
+
+    return 0;
+}
+"""
+
+overshoot_hooks0 = '''
                 difftime = (long long int)((long long int)delta - (long long int)expected);
                 slot.stated = index;
                 slot.deltad = bpf_log2l(difftime);
 
                 delta_t.increment(slot);
-
-                if (index < 6) {
+'''
+overshoot_hooks1 = '''
+    OVERSHOOT_MISPREDICTION,
+'''
+overshoot_hooks2 = '''
+if (index < 6) {
                     int next_state = index + 1;
                     expected = 0;
                     switch (next_state) {
@@ -181,18 +238,12 @@ TRACEPOINT_PROBE(power, cpu_idle)
                         case 8: expected = TR8; break;
                         case 9: expected = TR9; break;
                     }
-                    if ( difftime >= expected )
+                    if ( delta >= expected ) {
                         cp_increment(OVERSHOOT_MISPREDICTION);
+                        bpf_trace_printk("state %d diff %ld N_expected = %lld\\n", index, delta, expected);
+                    }
                 }
-            }
-        }
-
-        tss.delete(&zero);
-    }
-    
-    return 0;
-}
-"""
+'''
 
 range_filter = False
 all_cpus = False
@@ -217,6 +268,17 @@ if (args.all == 0 ):
 else:
     bpf_text = bpf_text.replace('ALLCPU', '0')
     all_cpus = True
+
+if (args.overshoot == 0 ):
+    bpf_text = bpf_text.replace('OVERSHOOT_HOOKS0', '')
+    bpf_text = bpf_text.replace('OVERSHOOT_HOOKS2', '')
+    bpf_text = bpf_text.replace('OVERSHOOT_HOOKS1', '')
+    bpf_text = bpf_text.replace('OVERSHOOT_STORAGE', '')
+else:
+    bpf_text  = bpf_text.replace('OVERSHOOT_HOOKS0', overshoot_hooks0)
+    bpf_text  = bpf_text.replace('OVERSHOOT_HOOKS2', overshoot_hooks2)
+    bpf_text = bpf_text.replace('OVERSHOOT_HOOKS1', overshoot_hooks1)
+    bpf_text = bpf_text.replace('OVERSHOOT_STORAGE', 'BPF_HISTOGRAM(delta_t, struct struct_idle_t);')
 
 import os
 TR = dict()
@@ -255,7 +317,8 @@ miss_by_time = b.get_table("missed_by")
 
 correct_prediction_count = b.get_table("correct_prediction")
 
-idle_delta = b.get_table("delta_t")
+if (args.overshoot):
+    idle_delta = b.get_table("delta_t")
 
 from multiprocessing import Process
 
@@ -289,12 +352,14 @@ if (1):
     entrycount.print_linear_hist("State entered\t")
     entrycount.clear()
 
-    miss_by_time.print_log2_hist("Mis-predicted Time (in us)\t")
+    miss_by_time.print_log2_hist("Undershoot delta (usec)\t")
     miss_by_time.clear()
 
     print("Total correct predictions: ", b["correct_prediction"][OVERSHOOT].value)
-    print("Total mis-predictions: ", b["correct_prediction"][UNDERSHOOT].value)
-    print("Total overshoot mis-predictions: ",
-            b["correct_prediction"][OVERSHOOT_MISPREDICTION].value)
+    print("Total undershoot mis-predictions: ", b["correct_prediction"][UNDERSHOOT].value)
+
+    if (args.overshoot):
+        print("Total overshoot mis-predictions: ", b["correct_prediction"][OVERSHOOT_MISPREDICTION].value)
+        idle_delta.print_log2_hist("overshooted delta (usec)\t")
+
     b["correct_prediction"].clear()
-    idle_delta.print_log2_hist("states overshooted by\t")
