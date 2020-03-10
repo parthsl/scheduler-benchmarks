@@ -68,7 +68,21 @@ BPF_HASH(state_entered, int, u32);
 
 BPF_HISTOGRAM(entrycount, int);
 BPF_HISTOGRAM(missed_by, u64);
-BPF_HASH(correct_prediction, int, int);
+
+enum pred_type {
+    OVERSHOOT = 1,
+    UNDERSHOOT,
+    OVERSHOOT_MISPREDICTION,
+    PT_MAX_STATS
+};
+
+BPF_ARRAY(correct_prediction, int, PT_MAX_STATS);
+
+static void cp_increment(int key) {
+    int *val = correct_prediction.lookup(&key);
+    if (val)
+        (*val)++;
+}
 
 struct struct_idle_t {
     s32 stated;
@@ -140,21 +154,36 @@ TRACEPOINT_PROBE(power, cpu_idle)
                 missed_time = expected - delta;
                 missed_by.increment(bpf_log2l(missed_time));
 
-                var = correct_prediction.lookup_or_try_init(&one, &zero);
-                if (var)
-                    correct_prediction.increment(one);
+                cp_increment(UNDERSHOOT);
 
             }
             else { // more time spent; overshoot
-                var = correct_prediction.lookup_or_try_init(&zero, &zero);
-                if (var)
-                    correct_prediction.increment(zero);
+                cp_increment(OVERSHOOT);
 
                 difftime = (long long int)((long long int)delta - (long long int)expected);
                 slot.stated = index;
                 slot.deltad = bpf_log2l(difftime);
 
                 delta_t.increment(slot);
+
+                if (index < 6) {
+                    int next_state = index + 1;
+                    expected = 0;
+                    switch (next_state) {
+                        case 0: expected = TR0; break;
+                        case 1: expected = TR1; break;
+                        case 2: expected = TR2; break;
+                        case 3: expected = TR3; break;
+                        case 4: expected = TR4; break;
+                        case 5: expected = TR5; break;
+                        case 6: expected = TR6; break;
+                        case 7: expected = TR7; break;
+                        case 8: expected = TR8; break;
+                        case 9: expected = TR9; break;
+                    }
+                    if ( difftime >= expected )
+                        cp_increment(OVERSHOOT_MISPREDICTION);
+                }
             }
         }
 
@@ -246,6 +275,11 @@ p.start()
 os.system("taskset -p -c %d %d 2>&1 >/dev/null" % (int(args.cpu), p.pid) )
 p.join()
 
+from ctypes import c_int
+OVERSHOOT = c_int(1)
+UNDERSHOOT = c_int(2)
+OVERSHOOT_MISPREDICTION = c_int(3)
+
 if (1):
     try:
         sleep(int(args.time))
@@ -258,12 +292,9 @@ if (1):
     miss_by_time.print_log2_hist("Mis-predicted Time (in us)\t")
     miss_by_time.clear()
 
-    try:
-        k,v = correct_prediction_count.items()[0]
-        print("Total correct predictions: ", v.value)
-        k,v = correct_prediction_count.items()[1]
-        print("Total mis-predictions: ", v.value)
-    except IndexError:
-        pass
-
+    print("Total correct predictions: ", b["correct_prediction"][OVERSHOOT].value)
+    print("Total mis-predictions: ", b["correct_prediction"][UNDERSHOOT].value)
+    print("Total overshoot mis-predictions: ",
+            b["correct_prediction"][OVERSHOOT_MISPREDICTION].value)
+    b["correct_prediction"].clear()
     idle_delta.print_log2_hist("states overshooted by\t")
