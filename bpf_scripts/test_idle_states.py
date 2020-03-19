@@ -22,6 +22,7 @@ examples = """examples
     ./test_idle_state.py -s 3        # Test state-3 on default CPU-0
     ./test_idle_state.py -c 1 -s 2   # Test state-2 on CPU-1
     ./test_idle_state.py -a          # Test on all CPUs
+    ./test_idle_state.py -t 5        # Stop after 5 sec
     ./test_idle_state.py -r 3-9      # Test state-1 (default) on CPUs from 3 to 9
 """
 
@@ -33,6 +34,7 @@ parser.add_argument("-c", "--cpu",  default=0, help="add CPU")
 parser.add_argument("-r", "--range",  nargs='?', default=0, help="add CPU range")
 parser.add_argument("-a", "--all", default=0, action="store_const", const=1, help="All CPUs")
 parser.add_argument("-s", "--state", default=1, help="Test IDLE state")
+parser.add_argument("-t", "--time", default=180, help="add timer in sec (default 180s)")
 args = parser.parse_args()
 
 # define BPF program
@@ -159,8 +161,12 @@ else:
     lower_bound_sleeptime = sleeptime*0.9
 
 # Process BPF scripts output
+deadline = int(args.time)
 exiting = 0
 while (1):
+    if deadline <= 0:
+        print ("Timed out: Unable to find the duty cycle")
+        break
     if sleeptime > upper_bound_sleeptime or sleeptime < lower_bound_sleeptime:
         print("Unable to find the duty cycle")
         break
@@ -169,6 +175,7 @@ while (1):
             sleeptime = 0
         p = create_process(period, sleeptime, loops, int(args.cpu))
         p.join()
+        deadline -= 5
     except KeyboardInterrupt:
         exiting = 1
 
