@@ -118,8 +118,9 @@ def inject_busy_loop(period, sleeptime, loops):
         periodStart = time()
         while (time()-periodStart) < (period - sleeptime):
             pass
-        if period > (time() - periodStart):
-            sleep(period - (time()-periodStart))
+        periodLeft = (time() - periodStart)
+        if period > periodLeft:
+            sleep(period - periodLeft)
 
 def create_process(period, sleeptime, loops, cpu):
     p = Process(target=inject_busy_loop, args=(period, sleeptime, loops))
@@ -184,8 +185,9 @@ while (1):
             states_touched[k.value] = idlestat[k].value
 
     print("Period = ",period, ", Sleeptime = ", sleeptime, ", States used = ", states_touched)
+
     if (test_state_id in states_touched.keys()):
-        print("Found duty cycle: period =",period, "sleep =",sleeptime)
+        print("Found duty cycle: period = %.6f sleep = %.6f" % (period, sleeptime))
         exiting = 1
     else:
         # find any key above test_state_id
