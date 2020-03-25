@@ -1,8 +1,28 @@
 #!/usr/bin/python
 #
-# This program gives the stats about the frequency throttling
-# On each cpu_frequency update, this triggers __cpufreq_get()
-# to find obtained cpu-frequency.
+# This program gives the stats about the frequency throttling.
+# On each cpu_frequency update, the program triggers __cpufreq_get()
+# to find obtained cpu-frequency. This allows the program to update the
+# histogram with the delta of the (Requested - Obtained) frequency on a per CPU
+# basis.
+#
+# Sample:
+# ========
+# $> python throttle_stats.py -t 10 -r 0-87
+# Collecting CPU frequency throttle stats for all CPUs
+#      Frequency throttled by (MHz) : count     distribution
+#          0 -> 1          : 0        |                                        |
+#          2 -> 3          : 0        |                                        |
+#          4 -> 7          : 0        |                                        |
+#          8 -> 15         : 0        |                                        |
+#         16 -> 31         : 8        |******                                  |
+#         32 -> 63         : 4        |***                                     |
+#         64 -> 127        : 13       |**********                              |
+#        128 -> 255        : 31       |***********************                 |
+#        256 -> 511        : 52       |****************************************|
+#        512 -> 1023       : 25       |*******************                     |
+# Total throttle counts = 134
+
 
 from __future__ import print_function
 from bcc import BPF
@@ -146,11 +166,11 @@ b["events"].open_perf_buffer(print_event)
 exiting = 0
 
 if all_cpus:
-    print("Collecting CPUFREQ stats for all CPUs")
+    print("Collecting cpu frequency throttle stats for all CPUs")
 elif range_filter:
-    print("Collecting CPUFREQ stats for %s CPUs" % args.range)
+    print("Collecting cpu frequency throttle stats for %s CPUs" % args.range)
 else:
-    print("Collecting CPUFREQ stats for %d CPU" % int(args.cpu))
+    print("Collecting cpu frequency throttle stats for %d CPU" % int(args.cpu))
 
 from time import time
 start_time = time()
