@@ -31,12 +31,13 @@ from multiprocessing import Process
 import subprocess
 from ctypes import c_int
 import argparse
+import multiprocessing
 
 examples = """examples
     ./throttle_stats.py       # Ctrl-C to Quit
     ./throttle_stats.py -t 5  # Run for 5 Sec
     ./throttle_stats.py -c 1  # Trace CPU-1. Defaults to CPU-0
-    ./throttle_stats.py -a    # Stats for all the CPUs
+    ./throttle_stats.py -a    # Stats for all the CPUs (default)
     ./throttle_stats.py -r 3-9# Stats for CPUs from 3 to 9
 """
 
@@ -44,8 +45,8 @@ parser = argparse.ArgumentParser(
         description="Summarize CPUIDLE latency as a histogram",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=examples)
-parser.add_argument("-t", "--time", default=5, help="add timer (default 5sec)")
-parser.add_argument("-c", "--cpu",  default=0, help="add CPU filter")
+parser.add_argument("-t", "--time", default=9999999, help="add timer (default infinte)")
+parser.add_argument("-c", "--cpu",  default=-1, help="add CPU filter")
 parser.add_argument("-r", "--range",  nargs='?', default=0, help="add CPU range filter")
 parser.add_argument("-a", "--all", default=1, action="store_const", const=0, help="All CPUs, don't filter")
 parser.add_argument("-d", "--debug", default=0, action="store_const", const=1, help="Debug info using trace_printk")
@@ -65,7 +66,7 @@ struct data_t {
 BPF_PERF_OUTPUT(events);
 
 BPF_HISTOGRAM(throttlestat, u32);
-BPF_ARRAY(last, struct data_t, 176);
+BPF_ARRAY(last, struct data_t, NR_CPUS);
 BPF_ARRAY(total_throttles, int, 1);
 
 RAW_TRACEPOINT_PROBE(cpu_frequency) {
@@ -124,9 +125,8 @@ else:
 range_filter = False
 all_cpus = False
 
-if args.all:
-    prog = prog.replace('FILTER', '1')
-    all_cpus = True
+if int(args.cpu) >= 0:
+    prog = prog.replace('FILTER', 'data.cpu_id == %d' % int(args.cpu))
 
 elif args.range:
     rstart = args.range.split('-')
@@ -138,12 +138,13 @@ elif args.range:
     if (rstart <= rend):
         range_filter = True
         prog = prog.replace('FILTER', '(data.cpu_id < '+str(rstart)+' || data.cpu_id > '+str(rend)+')')
-
 else:
-    prog = prog.replace('FILTER', 'data.cpu_id == %d' % int(args.cpu))
+    prog = prog.replace('FILTER', '1')
+    all_cpus = True
+
 
 # load BPF program
-b = BPF(text=prog)
+b = BPF(text=prog, cflags=["-DNUM_CPUS=%d" % multiprocessing.cpu_count()])
 
 pid_array = []
 
@@ -170,7 +171,7 @@ if all_cpus:
 elif range_filter:
     print("Collecting cpu frequency throttle stats for %s CPUs" % args.range)
 else:
-    print("Collecting cpu frequency throttle stats for %d CPU" % int(args.cpu))
+    print("Collecting cpu frequency throttle stats for CPU-%d" % int(args.cpu))
 
 from time import time
 start_time = time()
