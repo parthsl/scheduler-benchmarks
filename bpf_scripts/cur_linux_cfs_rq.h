@@ -1,6 +1,3 @@
-// From kernel 5.6-rc3
-#include <linux/sched.h>
-
 struct cfs_rq {
  struct load_weight load;
  unsigned int nr_running;
