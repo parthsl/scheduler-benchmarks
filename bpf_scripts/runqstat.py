@@ -40,13 +40,15 @@ parser = argparse.ArgumentParser(
         description="Summarize Runqueue Stats as a histogram",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=examples)
-parser.add_argument("-t", "--time", default=5, help="add timer (default 5sec)")
+parser.add_argument("-t", "--time", default=10000, help="add timer (default 10000sec)")
 parser.add_argument("-c", "--cpu",  default=0, help="add CPU (default CPU-0)")
 parser.add_argument("-r", "--range",  nargs='?', default=0, help="add CPU range")
 parser.add_argument("-a", "--all", default=0, action="store_const", const=1, help="All CPUs")
 parser.add_argument("-nt", "--notargetcpustats", default=0, action="store_const", const=1, help="Don't calculate CPUs sleected as target for sched_wakeup")
 parser.add_argument("-nr", "--nrstat", default=0, action="store_const", const=1, help="Calculate nr Running statistics")
 parser.add_argument("-nw", "--nowakeupnew", default=0, action="store_const", const=1, help="Don't calculate CPUs targeted by wake_up_new_task")
+parser.add_argument("-ns", "--noselfwakeups", default=0, action="store_const", const=1, help="Don't count wakeup happened on the waker CPU itself")
+parser.add_argument("-s", "--aggr", default=0, action="store_const", const=1, help="Aggregate nr_running across all CPUs")
 args = parser.parse_args()
 
 # define BPF program
@@ -67,6 +69,7 @@ struct data_t {
 
 BPF_HISTOGRAM(targetcpu_hist, struct data_t);
 BPF_HISTOGRAM(nr_hist, struct nr_t);
+BPF_HISTOGRAM(nr_running, int);
 
 struct rq_partial {
     raw_spinlock_t          lock;
@@ -91,12 +94,14 @@ static void update_nr (int cpu)
     nr_t.nr_running = rq->nr_running;
 
     nr_hist.increment(nr_t);
+    nr_running.increment(nr_t.nr_running);
 }
 
 static void update_targetcpu(int cpu, int targetcpu)
 {
     struct data_t data_t = {.cpu = 0, .target_cpu = 0};
-    
+
+    NOSELFWAKEUPS;
     data_t.cpu = cpu;
     data_t.target_cpu = targetcpu;
 
@@ -150,10 +155,15 @@ bpf_text = bpf_text.replace('HEADERS', header)
 if (not args.nowakeupnew):
     bpf_text = "#define SCHED_WAKEUP_NEW_STATS\n" + bpf_text
 
-if (args.nrstat):
+if (args.nrstat or args.aggr):
     bpf_text = bpf_text.replace('UPDATE_NR', 'update_nr(cpu);')
 else:
     bpf_text = bpf_text.replace('UPDATE_NR', '')
+
+if (args.noselfwakeups):
+    bpf_text = bpf_text.replace('NOSELFWAKEUPS', 'if ( cpu == targetcpu ) return')
+else:
+    bpf_text = bpf_text.replace('NOSELFWAKEUPS', '')
 
 range_filter = False
 all_cpus = False
@@ -180,9 +190,9 @@ else:
     all_cpus = True
 
 b = BPF(text=bpf_text)
-if (not args.notargetcpustats):
+if (not args.notargetcpustats or args.aggr):
     b.attach_tracepoint("sched:sched_switch", "update_nr_tp");
-if (args.nrstat):
+if (args.nrstat or args.aggr):
     b.attach_tracepoint("sched:sched_process_exit", "update_nr_tp");
 
 if(all_cpus):
@@ -195,6 +205,7 @@ else:
 # output
 targetcpustat = b.get_table("targetcpu_hist")
 nrstat = b.get_table("nr_hist")
+nr_running = b.get_table("nr_running")
 
 if (1):
     try:
@@ -205,8 +216,11 @@ if (1):
     if(not args.notargetcpustats):
         print("CPUs used for sched_wakeup targets")
         targetcpustat.print_linear_hist("target cpus", "CPU")
-    if (args.nrstat):
+    if(args.aggr):
+        nr_running.print_linear_hist("nr_running")
+    elif (args.nrstat):
         if (not args.notargetcpustats):
             print("\n===========\n")
         print("Number of running tasks on CPU(s)")
         nrstat.print_linear_hist("nrstat", "CPU")
+
