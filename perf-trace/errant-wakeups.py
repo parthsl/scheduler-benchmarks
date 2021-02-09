@@ -21,6 +21,7 @@ from Core import *
 NR_CPUS = 176
 runqlen = [0 for i in range(NR_CPUS)]
 confidence = [0 for i in range(NR_CPUS)]
+LLC_CPUMASK_SIZE = 8
 
 def print_runqlen(rows, columns):
     global runqlen
@@ -32,14 +33,38 @@ def print_runqlen(rows, columns):
             print(runqlen[i*columns + j], end="\t")
         print()
 
+
 def pr():
     print_runqlen(20, NR_CPUS/20+1)
 
+
+def is_idle_cpu(cpu):
+    global runqlen
+
+    return runqlen[cpu]
+
+
+def sd_mask(cpu, cpumask_size):
+    '''
+    Find domain cpumask for a given cpu
+    @cpu: cpu-id number
+    @cpumask_size: size of the cpumask for specific domain
+
+    For cpumask_size = 4, sd_mask return first and last cpu of small core
+    lly, for size = 8, this returns cpus of big core.
+    '''
+    first_cpu = (cpu//cpumask_size)*cpumask_size
+    return first_cpu,first_cpu+cpumask_size
+
+
 def trace_begin():
-	print("Perf-script for finding if wakeups happen on busy CPUs despite?")
+    print("Perf-script for finding if wakeups happen on busy CPUs despite?")
 
 def trace_end():
+    print("Final runqlength output")
+    print("-----------------------")
     pr()
+
 
 def sched__sched_migrate_task(event_name, context, common_cpu,
         common_secs, common_nsecs, common_pid, common_comm,
@@ -72,6 +97,11 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                 global runqlen
                 runqlen[target_cpu] += 1
 
+                # Taking sched trace in middle of workload screws the
+                # runqlength count for this script as it won't know the initial
+                # runqlength.
+                # Hence confidence-1 iff the CPU entered idle
+                # states somewhere in the trace
                 global confidence
                 if (confidence[target_cpu]==1):
                         if (runqlen[target_cpu] > 1):
@@ -82,6 +112,12 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                                 " runqlen="+str(runqlen[target_cpu]) + 
                                 "\tcomm=" + comm + " " + str(pid))
                                 pr()
+
+                                first_cpu,last_cpu = sd_mask(common_cpu, LLC_CPUMASK_SIZE)
+                                for i in range(first_cpu, last_cpu):
+                                    if (is_idle_cpu(i)):
+                                        print("It could have woken up on idle cpu=" + str(i))
+
                                 print()
 
                 #print_header(event_name, common_cpu, common_secs, common_nsecs, common_pid, common_comm)
