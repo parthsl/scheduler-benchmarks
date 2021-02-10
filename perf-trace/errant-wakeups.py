@@ -4,6 +4,10 @@
 # This script provides a way to calculate struct rq->nr_running or runqueue
 # length from the sched:* traces.
 #
+# Use sched_update_nr_running trace for 100% accuracy. Use
+# https://github.ibm.com/pshah015/tracepoint-modules for loading extra modules
+# for the same.
+
 # Example to take sched:* traces:
 # ===========
 # perf record -e sched:sched_wakeup,\\
