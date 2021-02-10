@@ -36,16 +36,22 @@ sys.path.append(os.environ['PERF_EXEC_PATH'] + \
 from perf_trace_context import *
 from Core import *
 
+# script specific tunables
 NR_CPUS = 176
+LLC_CPUMASK_SIZE = 8
+VERBOSE = False
+
+# variables
 runqlen = [0 for i in range(NR_CPUS)]
 confidence = [0 for i in range(NR_CPUS)]
+total_wakeup_on_idle_rq = 0
+total_wakeup_on_busy_rq = 0
+wakeup_runqlen = dict()
 
-# Confidence flags
+# Confidence flags, used for enumeration
 NO_CONFIDENCE = 0
 DERIVED_CONFIDENCE = 1
 ABSOLUTE_CONFIDENCE = 2
-
-LLC_CPUMASK_SIZE = 8
 
 def print_runqlen(rows, columns):
     global runqlen
@@ -87,6 +93,12 @@ def trace_begin():
 def trace_end():
     print("Final runqlength output")
     print("-----------------------")
+    global total_wakeup_on_idle_rq
+    global total_wakeup_on_busy_rq
+    print("Total wakeups on idle rq=", total_wakeup_on_idle_rq)
+    print("Total wakeups on busy rq=", total_wakeup_on_busy_rq)
+    global wakeup_runqlen
+    print("Histogram of {nr_running: sample} = ",wakeup_runqlen)
     pr()
 
 
@@ -138,6 +150,7 @@ def sched__sched_wakeup(event_name, context, common_cpu,
         common_callchain, comm, pid, prio, success, 
         target_cpu, perf_sample_dict):
 
+                is_correct_wakeup = 1
                 global confidence
                 global runqlen
                 if confidence[target_cpu] < ABSOLUTE_CONFIDENCE:
@@ -157,7 +170,8 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                                 " target_cpu="+str(target_cpu) + 
                                 " runqlen="+str(runqlen[target_cpu]) + 
                                 "\tcomm=" + comm + " " + str(pid))
-                                pr()
+                                if VERBOSE:
+                                    pr()
 
                                 first_cpu,last_cpu = sd_mask(common_cpu, LLC_CPUMASK_SIZE)
 
@@ -167,8 +181,15 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                                         if (suggestion_str == ""):
                                             suggestion_str = "It could have woken up on idle cpu="
                                         suggestion_str += str(i)+", "
+                                        is_correct_wakeup = 0
 
                                 print(suggestion_str)
+
+                        
+                        global total_wakeup_on_idle_rq
+                        global total_wakeup_on_busy_rq
+                        total_wakeup_on_idle_rq += is_correct_wakeup
+                        total_wakeup_on_busy_rq += 1-is_correct_wakeup
 
                 #print_header(event_name, common_cpu, common_secs, common_nsecs, common_pid, common_comm)
 
@@ -197,6 +218,10 @@ def sched__sched_update_nr_running(event_name, context, common_cpu,
                 global runqlen
                 runqlen[cpu] = nr_running
                 confidence[cpu] = ABSOLUTE_CONFIDENCE
+                if nr_running in wakeup_runqlen:
+                    wakeup_runqlen[nr_running] += 1
+                else:
+                    wakeup_runqlen[nr_running] = 1
 
 
 def trace_unhandled(event_name, context, event_fields_dict, perf_sample_dict):
