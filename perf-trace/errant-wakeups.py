@@ -35,6 +35,12 @@ from Core import *
 NR_CPUS = 176
 runqlen = [0 for i in range(NR_CPUS)]
 confidence = [0 for i in range(NR_CPUS)]
+
+# Confidence flags
+NO_CONFIDENCE = 0
+DERIVED_CONFIDENCE = 1
+ABSOLUTE_CONFIDENCE = 2
+
 LLC_CPUMASK_SIZE = 8
 
 def print_runqlen(rows, columns):
@@ -85,6 +91,12 @@ def sched__sched_migrate_task(event_name, context, common_cpu,
         common_callchain, comm, pid, prio, orig_cpu, 
         dest_cpu, perf_sample_dict):
 
+                global confidence
+                # If we have nr_running traces of orig_cpu, we must have for
+                # dest_cpu as well.
+                if (confidence[orig_cpu] == ABSOLUTE_CONFIDENCE or confidence[dest_cpu] > ABSOLUTE_CONFIDENCE):
+                    return
+
                 global runqlen
                 runqlen[orig_cpu] -= 1
                 runqlen[dest_cpu] += 1
@@ -94,8 +106,9 @@ def sched__sched_migrate_task(event_name, context, common_cpu,
                 if (dest_cpu == 60):
                     print("Adding task to cpu=60 migrate", common_secs, common_nsecs, runqlen[60])
 
-                if (confidence[orig_cpu] ==1 and runqlen[orig_cpu] < 0):
-                    print("error orig", orig_cpu, str(common_secs)+"."+str(common_nsecs))
+                if (confidence[orig_cpu] > NO_CONFIDENCE and runqlen[orig_cpu] < 0):
+                    print("error with -ve runq at orig_cpu=", orig_cpu,
+                            str(common_secs)+"."+str(common_nsecs))
 
 
 def sched__sched_switch(event_name, context, common_cpu,
@@ -103,6 +116,9 @@ def sched__sched_switch(event_name, context, common_cpu,
         common_callchain, prev_comm, prev_pid, prev_prio, prev_state, 
         next_comm, next_pid, next_prio, perf_sample_dict):
 
+                global confidence
+                if confidence [common_cpu]== ABSOLUTE_CONFIDENCE:
+                    return
                 global runqlen
 
                 # TASK_INTERRUPTIBLE = 0x001 => "S"
@@ -118,8 +134,10 @@ def sched__sched_wakeup(event_name, context, common_cpu,
         common_callchain, comm, pid, prio, success, 
         target_cpu, perf_sample_dict):
 
+                global confidence
                 global runqlen
-                runqlen[target_cpu] += 1
+                if confidence[target_cpu] < ABSOLUTE_CONFIDENCE:
+                    runqlen[target_cpu] += 1
 
                 if (target_cpu == 60):
                     print("Adding task to cpu=60 wakeup", common_secs, common_nsecs, runqlen[60])
@@ -127,10 +145,7 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                 # Taking sched trace in middle of workload screws the
                 # runqlength count for this script as it won't know the initial
                 # runqlength.
-                # Hence confidence-1 iff the CPU entered idle
-                # states somewhere in the trace
-                global confidence
-                if (confidence[target_cpu]==1):
+                if (confidence[target_cpu] > NO_CONFIDENCE):
                         if (runqlen[target_cpu] > 1):
                                 print(str(common_comm) + " " + str(common_pid) + "\t" +
                                 str(common_secs) + "." + str(common_nsecs) +
@@ -141,17 +156,25 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                                 pr()
 
                                 first_cpu,last_cpu = sd_mask(common_cpu, LLC_CPUMASK_SIZE)
-                                for i in range(first_cpu, last_cpu):
-                                    if (is_idle_cpu(i)):
-                                        print("It could have woken up on idle cpu=" + str(i))
 
-                                print()
+                                suggestion_str = ""
+                                for i in range(first_cpu, last_cpu):
+                                    if (is_idle_cpu(i)==0):
+                                        if (suggestion_str == ""):
+                                            suggestion_str = "It could have woken up on idle cpu="
+                                        suggestion_str += str(i)+", "
+
+                                print(suggestion_str)
 
                 #print_header(event_name, common_cpu, common_secs, common_nsecs, common_pid, common_comm)
 
 def power__cpu_idle(event_name, context, common_cpu,
         common_secs, common_nsecs, common_pid, common_comm,
         common_callchain, state, cpu_id, perf_sample_dict):
+
+                global confidence
+                if confidence[cpu_id] == 2:
+                    return
 
                 global runqlen
                 if (state < 100):
@@ -160,8 +183,17 @@ def power__cpu_idle(event_name, context, common_cpu,
                         runqlen[cpu_id] = 0
                         if (common_cpu == 60):
                             print("Adding - task to cpu=60 idle", common_secs, common_nsecs, runqlen[60], runqlen[60])
-                        global confidence
-                        confidence[cpu_id] = 1
+                        confidence[cpu_id] = DERIVED_CONFIDENCE
+
+
+def sched__sched_update_nr_running(event_name, context, common_cpu,
+	common_secs, common_nsecs, common_pid, common_comm,
+	common_callchain, cpu, change, nr_running, perf_sample_dict):
+
+                global runqlen
+                runqlen[cpu] = nr_running
+                confidence[cpu] = ABSOLUTE_CONFIDENCE
+
 
 def trace_unhandled(event_name, context, event_fields_dict, perf_sample_dict):
         print(get_dict_as_string(event_fields_dict))
