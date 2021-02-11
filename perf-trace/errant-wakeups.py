@@ -39,6 +39,7 @@ from Core import *
 # script specific tunables
 NR_CPUS = 176
 LLC_CPUMASK_SIZE = 8
+LATENCY_THRESHOLD_US = (10**3)*10 # 10ms
 VERBOSE = False
 
 # variables
@@ -47,6 +48,17 @@ confidence = [0 for i in range(NR_CPUS)]
 total_wakeup_on_idle_rq = 0
 total_wakeup_on_busy_rq = 0
 wakeup_runqlen = dict()
+
+class Mark:
+    def __init__(self, sec, nsec, runqlen, errant=False):
+        self.sec = sec
+        self.nsec = nsec
+        self.runqlen = runqlen
+        self.errant = errant
+
+
+# Store information like ktime, nr_running, etc. for each pid
+wakeup_mark = dict()
 
 # Confidence flags, used for enumeration
 NO_CONFIDENCE = 0
@@ -117,11 +129,6 @@ def sched__sched_migrate_task(event_name, context, common_cpu,
                 runqlen[orig_cpu] -= 1
                 runqlen[dest_cpu] += 1
 
-                if (orig_cpu == 60):
-                    print("Adding - task to cpu=60 migrate", common_secs, common_nsecs, runqlen[60])
-                if (dest_cpu == 60):
-                    print("Adding task to cpu=60 migrate", common_secs, common_nsecs, runqlen[60])
-
                 if (confidence[orig_cpu] > NO_CONFIDENCE and runqlen[orig_cpu] < 0):
                     print("error with -ve runq at orig_cpu=", orig_cpu,
                             str(common_secs)+"."+str(common_nsecs))
@@ -133,16 +140,26 @@ def sched__sched_switch(event_name, context, common_cpu,
         next_comm, next_pid, next_prio, perf_sample_dict):
 
                 global confidence
+                global runqlen
+                global wakeup_mark
+
+                if next_pid in wakeup_mark:
+                    mark = wakeup_mark[next_pid]
+                    tdiff = (common_secs - mark.sec)*(10**9)
+                    tdiff += common_nsecs - mark.nsec
+                    tdiff /= (10**3) # Convert to usec
+
+                    if tdiff > (LATENCY_THRESHOLD_US):
+                        print("Higher latency observed for wakeup at ktime=", mark.sec, mark.nsec)
+                        print()
+                    del(wakeup_mark[next_pid])
+
                 if confidence [common_cpu]== ABSOLUTE_CONFIDENCE:
                     return
-                global runqlen
-
                 # TASK_INTERRUPTIBLE = 0x001 => "S"
                 # TASK_UNINTERRUPTIBLE = 0x002 => "D"
                 if (prev_state == 1 or prev_state == 2):
                         runqlen[common_cpu] -= 1
-                        if (common_cpu == 60):
-                            print("Adding - task to cpu=60 switch", common_secs, common_nsecs, runqlen[60])
 
 
 def sched__sched_wakeup(event_name, context, common_cpu,
@@ -156,13 +173,11 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                 if confidence[target_cpu] < ABSOLUTE_CONFIDENCE:
                     runqlen[target_cpu] += 1
 
-                if (target_cpu == 60):
-                    print("Adding task to cpu=60 wakeup", common_secs, common_nsecs, runqlen[60])
-
                 # Taking sched trace in middle of workload screws the
                 # runqlength count for this script as it won't know the initial
                 # runqlength.
                 if (confidence[target_cpu] > NO_CONFIDENCE):
+                        suggestion_str = ""
                         if (runqlen[target_cpu] > 1):
                                 print(str(common_comm) + " " + str(common_pid) + "\t" +
                                 str(common_secs) + "." + str(common_nsecs) +
@@ -175,7 +190,6 @@ def sched__sched_wakeup(event_name, context, common_cpu,
 
                                 first_cpu,last_cpu = sd_mask(common_cpu, LLC_CPUMASK_SIZE)
 
-                                suggestion_str = ""
                                 for i in range(first_cpu, last_cpu):
                                     if (is_idle_cpu(i)==0):
                                         if (suggestion_str == ""):
@@ -186,6 +200,14 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                                 print(suggestion_str)
 
                         
+                        global wakeup_mark
+                        mark = Mark(common_secs, common_nsecs, runqlen[target_cpu])
+                        if (suggestion_str == ""):
+                            mark.errant = False
+                        else:
+                            mark.errant = True
+                        wakeup_mark[pid] = mark
+
                         global total_wakeup_on_idle_rq
                         global total_wakeup_on_busy_rq
                         total_wakeup_on_idle_rq += is_correct_wakeup
@@ -206,8 +228,6 @@ def power__cpu_idle(event_name, context, common_cpu,
                         if (confidence[cpu_id]==1 and runqlen[cpu_id]>0):
                             print("Runqueue not emptied before this", common_secs, common_nsecs, cpu_id)
                         runqlen[cpu_id] = 0
-                        if (common_cpu == 60):
-                            print("Adding - task to cpu=60 idle", common_secs, common_nsecs, runqlen[60], runqlen[60])
                         confidence[cpu_id] = DERIVED_CONFIDENCE
 
 
