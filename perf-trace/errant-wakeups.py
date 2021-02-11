@@ -37,16 +37,19 @@ from perf_trace_context import *
 from Core import *
 
 # script specific tunables
-NR_CPUS = 176
-LLC_CPUMASK_SIZE = 8
+NR_CPUS = 80
+WAKEUP_SCOPE_SIZE = 8
 LATENCY_THRESHOLD_US = (10**3)*10 # 10ms
 VERBOSE = False
+# OFFLINE_CPUS = [2*i+1 for i in range(40)] # odd threads are offline
+OFFLINE_CPUS = range(40, 80) # CPUs 40-79 are offline
 
 # variables
 runqlen = [0 for i in range(NR_CPUS)]
 confidence = [0 for i in range(NR_CPUS)]
-total_wakeup_on_idle_rq = 0
-total_wakeup_on_busy_rq = 0
+correct_decision_on_idle_cpu = 0
+correct_decision_on_busy_cpu = 0
+incorrect_decision = 0
 wakeup_runqlen = dict()
 
 class Mark:
@@ -64,6 +67,11 @@ wakeup_mark = dict()
 NO_CONFIDENCE = 0
 DERIVED_CONFIDENCE = 1
 ABSOLUTE_CONFIDENCE = 2
+
+# DECISION flags, used as enumeration
+CORRECT_DECISION_ON_IDLE_CPU = 1
+CORRECT_DECISION_ON_BUSY_CPU = 2
+INCORRECT_DECISION = 3
 
 def print_runqlen(rows, columns):
     global runqlen
@@ -101,14 +109,25 @@ def sd_mask(cpu, cpumask_size):
 
 def trace_begin():
     print("Perf-script for finding if wakeups happen on busy CPUs despite?")
+    print("Script parameters: ")
+    print("WAKEUP_SCOPE_SIZE : ", WAKEUP_SCOPE_SIZE)
+    print("OFFLINE_CPUS : ", OFFLINE_CPUS)
+    print("NR_CPUS : ", NR_CPUS)
+    print("===============================================================\n")
 
 def trace_end():
     print("Final runqlength output")
     print("-----------------------")
-    global total_wakeup_on_idle_rq
-    global total_wakeup_on_busy_rq
-    print("Total wakeups on idle rq=", total_wakeup_on_idle_rq)
-    print("Total wakeups on busy rq=", total_wakeup_on_busy_rq)
+    global correct_decision_on_idle_cpu
+    global correct_decision_on_busy_cpu
+    global incorrect_decision
+    print("Correct wakeup decision on idle rq = ", correct_decision_on_idle_cpu)
+    print("Correct wakeup decision in busy cpu = ", correct_decision_on_busy_cpu)
+    print("Incorrect wakeup decision =", incorrect_decision)
+    ratio = correct_decision_on_idle_cpu + correct_decision_on_busy_cpu
+    ratio = (ratio*100)/(incorrect_decision+ratio)
+    print("Accuracy = ", ratio)
+    print("---------------------------------------------------------------\n")
     global wakeup_runqlen
     print("Histogram of {nr_running: sample} = ",wakeup_runqlen)
     pr()
@@ -167,7 +186,8 @@ def sched__sched_wakeup(event_name, context, common_cpu,
         common_callchain, comm, pid, prio, success, 
         target_cpu, perf_sample_dict):
 
-                is_correct_wakeup = 1
+                decision = CORRECT_DECISION_ON_IDLE_CPU
+
                 global confidence
                 global runqlen
                 if confidence[target_cpu] < ABSOLUTE_CONFIDENCE:
@@ -179,6 +199,8 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                 if (confidence[target_cpu] > NO_CONFIDENCE):
                         suggestion_str = ""
                         if (runqlen[target_cpu] > 1):
+                                decision = CORRECT_DECISION_ON_BUSY_CPU
+
                                 print(str(common_comm) + " " + str(common_pid) + "\t" +
                                 str(common_secs) + "." + str(common_nsecs) +
                                 " problematic wakeup at cpu=" + str(common_cpu) +
@@ -188,14 +210,16 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                                 if VERBOSE:
                                     pr()
 
-                                first_cpu,last_cpu = sd_mask(common_cpu, LLC_CPUMASK_SIZE)
+                                first_cpu,last_cpu = sd_mask(common_cpu, WAKEUP_SCOPE_SIZE)
 
                                 for i in range(first_cpu, last_cpu):
+                                    if i in OFFLINE_CPUS:
+                                        continue
                                     if (is_idle_cpu(i)==0):
                                         if (suggestion_str == ""):
                                             suggestion_str = "It could have woken up on idle cpu="
                                         suggestion_str += str(i)+", "
-                                        is_correct_wakeup = 0
+                                        decision = INCORRECT_DECISION
 
                                 print(suggestion_str)
 
@@ -208,10 +232,15 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                             mark.errant = True
                         wakeup_mark[pid] = mark
 
-                        global total_wakeup_on_idle_rq
-                        global total_wakeup_on_busy_rq
-                        total_wakeup_on_idle_rq += is_correct_wakeup
-                        total_wakeup_on_busy_rq += 1-is_correct_wakeup
+                        global correct_decision_on_idle_cpu
+                        global correct_decision_on_busy_cpu
+                        global incorrect_decision
+                        if decision == CORRECT_DECISION_ON_IDLE_CPU:
+                            correct_decision_on_idle_cpu += 1
+                        elif decision == CORRECT_DECISION_ON_BUSY_CPU:
+                            correct_decision_on_busy_cpu += 1
+                        else:
+                            incorrect_decision += 1
 
                 #print_header(event_name, common_cpu, common_secs, common_nsecs, common_pid, common_comm)
 
