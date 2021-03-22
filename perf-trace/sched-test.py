@@ -4,6 +4,9 @@
 # This script parses perf.data file recorded with following events
 # perf record -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch,sched:sched_waking,sched:sched_migrate_task,sched:sched_update_nr_running -aR
 # 
+# The sched:sched_update_nr_running trace event can be registered/activated using below module
+# https://github.ibm.com/pshah015/tracepoint-modules for loading extra modules
+# 
 # Sample output:
 # ==============
 # Perf-script for finding if wakeups happen on busy CPUs despite?
