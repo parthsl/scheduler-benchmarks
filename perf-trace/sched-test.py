@@ -197,7 +197,7 @@ def sched__sched_switch(event_name, context, common_cpu,
                     global sched_latency
                     sched_latency.append(tdiff)
 
-                    if tdiff > (LATENCY_THRESHOLD_US):
+                    if VERBOSE_LEVEL >= 1 and tdiff > (LATENCY_THRESHOLD_US):
                         print("Higher latency observed for wakeup at ktime=", wakeup_mark.sec, wakeup_mark.nsec)
                         print()
                     del(pid_timehist[next_pid])
@@ -292,10 +292,13 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                                             suggestion_str = str(comm)+"/"+str(pid)+" could have woken up on idle cpu = "
                                         suggestion_str += str(i)+", "
                                         decision = INCORRECT_DECISION
+                            
+                                if prev_cpu in waker_sd_llc:
+                                    break
 
                             if VERBOSE_LEVEL >= 1:
                                 if waker_cpu in waker_sd_llc and prev_cpu in waker_sd_llc:
-                                    print (suggestion_str)
+                                    print (suggestion_str, 'where target_cpu = ', target_cpu)
                                 else:
                                     print(suggestion_str, "\twhere waker_cpu = ", waker_cpu, " and prev_cpu = ", prev_cpu, " and target_cpu = ", target_cpu)
 
@@ -336,7 +339,7 @@ def get_dict_as_string(a_dict, delimiter=' '):
         return delimiter.join(['%s=%s'%(k,str(v))for k,v in sorted(a_dict.items())])
 
 def trace_begin():
-    print("Perf-script for finding if wakeups happen on busy CPUs despite?")
+    print("Perf-script for calculating scheduler wakeup stats")
     print("Script parameters: ")
     print("WAKEUP_SCOPE_SIZE : ", WAKEUP_SCOPE_SIZE)
     print("OFFLINE_CPUS : ", OFFLINE_CPUS)
