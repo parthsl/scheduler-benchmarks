@@ -34,7 +34,10 @@
 # ------------------#Wake affine pulled---------------------------------------
 # Number of times a task got pulled to waker's llc =  8
 # ------------------Pre-migration wait time (in us)---------------------------
-# Very few migrations occured. Wait time =  [22.42, 25.006, 14.744, 71.886]
+# 50%ile:          17
+# 90%ile:          52
+# 99%ile:          530
+# 99.99%ile:       2049
 # 
 # NOTE: SET "SCRIPT SPECIFIC TUNABLES" BEFORE USING
 # @author: Parth Shah <parth@linux.ibm.com>
