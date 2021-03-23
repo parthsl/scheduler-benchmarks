@@ -33,6 +33,8 @@
 # key:value = SMT-mode : sample-count = {1: 2922, 2: 358, 3: 70, 4: 55}
 # ------------------#Wake affine pulled---------------------------------------
 # Number of times a task got pulled to waker's llc =  8
+# ------------------Pre-migration wait time (in us)---------------------------
+# Very few migrations occured. Wait time =  [22.42, 25.006, 14.744, 71.886]
 # 
 # NOTE: SET "SCRIPT SPECIFIC TUNABLES" BEFORE USING
 # @author: Parth Shah <parth@linux.ibm.com>
@@ -109,6 +111,7 @@ sched_latency = []
 scheduler_decision_latency = []
 smt_after_wakeup = dict() #If a task wakes up on idle core then it is said to be woken up on SMT-1.
 wake_affine_pulled = 0 # Counter to keep track
+pre_migration_wait_time = [] # Keep track of time spent after wakeup and before migration of task happens
 
 def print_runqlen(rows, columns):
     global runqlen
@@ -180,7 +183,14 @@ def sched__sched_migrate_task(event_name, context, common_cpu,
         common_secs, common_nsecs, common_pid, common_comm,
         common_callchain, comm, pid, prio, orig_cpu, 
         dest_cpu, perf_sample_dict):
-                pass
+                
+                global pid_timehist
+
+                if pid in pid_timehist and pid_timehist[pid].event_type == WAKEUP:
+                    wakeup_event = pid_timehist[pid]
+                    global pre_migration_wait_time
+                    pre_migration_wait_time.append(wakeup_event.time_diff(common_secs, common_nsecs))                    
+
                 # if (runqlen[orig_cpu] < 0):
                 #     print("error with -ve runq at orig_cpu=", orig_cpu,
                 #             str(common_secs)+"."+str(common_nsecs))
@@ -203,6 +213,8 @@ def sched__sched_switch(event_name, context, common_cpu,
                     if VERBOSE_LEVEL >= 1 and tdiff > (LATENCY_THRESHOLD_US):
                         print("Higher latency observed for wakeup at ktime=", wakeup_mark.sec, wakeup_mark.nsec)
                         print()
+
+                if next_pid in pid_timehist:
                     del(pid_timehist[next_pid])
 
 
@@ -372,3 +384,9 @@ def trace_end():
     print('key:value = SMT-mode : sample-count =', smt_after_wakeup)
     print('------------------#Wake affine pulled---------------------------------------')
     print('Number of times a task got pulled to waker\'s llc = ', wake_affine_pulled)
+    print('------------------Pre-migration wait time (in us)---------------------------')
+    global pre_migration_wait_time
+    if (len(pre_migration_wait_time) < 10):
+        print("Very few migrations occured. Wait time = ", pre_migration_wait_time)
+    else:
+        print_latency_hist(pre_migration_wait_time)
