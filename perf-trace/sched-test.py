@@ -100,6 +100,7 @@ class Mark:
 # Store information like ktime, nr_running, etc. for each pid
 pid_timehist = dict()
 cpu_timehist = dict()
+cpu_topology = None
 
 # DECISION flags, used as enumeration
 CORRECT_DECISION_ON_IDLE_CPU = 1
@@ -158,16 +159,23 @@ def sd_mask(cpu, cpumask_size):
     lly, for size = 8, this returns cpus of big core.
     '''
     first_cpu = (cpu//cpumask_size)*cpumask_size
-    return first_cpu,first_cpu+cpumask_size
+    return range(first_cpu,first_cpu+cpumask_size)
+
+def sd_llc_mask(cpu):
+    try:
+        global cpu_topology
+        return cpu_topology.llc_sibling(cpu)
+    except:
+        return sd_mask(cpu, WAKEUP_SCOPE_SIZE)
 
 def smt_mask(cpu, smt_size=4):
     return sd_mask(cpu, smt_size)
 
 def nr_busy_in_smt(cpu, smt_size=4):
-    smt_cpu_first,smt_cpu_last = smt_mask(cpu)
+    mask = smt_mask(cpu)
     smt_mode = smt_size
     global runqlen
-    for i in range(smt_cpu_first, smt_cpu_last):
+    for i in mask:
         if runqlen[i] == 0:
             smt_mode -= 1
     return smt_mode
@@ -260,8 +268,7 @@ def sched__sched_wakeup(event_name, context, common_cpu,
 
                 # Analyse affinity related decision
                 # If prev_cpu and waker_cpu are in same sd then affinity does not matter
-                cpu_mask_tuple = sd_mask(waker_cpu, WAKEUP_SCOPE_SIZE)
-                waker_sd_llc = range(cpu_mask_tuple[0], cpu_mask_tuple[1])
+                waker_sd_llc = sd_llc_mask(waker_cpu)
 
                 if waker_cpu in waker_sd_llc and prev_cpu in waker_sd_llc:
                     '''
@@ -294,12 +301,11 @@ def sched__sched_wakeup(event_name, context, common_cpu,
                         else:
                             for loop in range(2):
                                 if loop == 0:
-                                    llc_mask = sd_mask(waker_cpu, WAKEUP_SCOPE_SIZE)
+                                    llc_mask = sd_llc_mask(waker_cpu)
                                 else:
-                                    llc_mask = sd_mask(prev_cpu, WAKEUP_SCOPE_SIZE)
-                                range_sd_llc = range(llc_mask[0], llc_mask[1])
+                                    llc_mask = sd_llc_mask(prev_cpu)
 
-                                for i in range_sd_llc:
+                                for i in llc_mask:
                                     if i in OFFLINE_CPUS:
                                         continue
                                     if (is_idle_cpu(i)==0):
@@ -343,8 +349,7 @@ def sched__sched_update_nr_running(event_name, context, common_cpu,
 
 
 def trace_unhandled(event_name, context, event_fields_dict, perf_sample_dict):
-        print(get_dict_as_string(event_fields_dict))
-        print('Sample: {'+get_dict_as_string(perf_sample_dict['sample'], ', ')+'}')
+    pass
 
 def print_header(event_name, cpu, secs, nsecs, pid, comm):
         print("%-20s %5u %05u.%09u %8u %-20s " % \
@@ -356,7 +361,14 @@ def get_dict_as_string(a_dict, delimiter=' '):
 def trace_begin():
     print("Perf-script for calculating scheduler wakeup stats")
     print("Script parameters: ")
-    print("WAKEUP_SCOPE_SIZE : ", WAKEUP_SCOPE_SIZE)
+    import schedstat_parser
+    try:
+        global cpu_topology
+        cpu_topology = schedstat_parser.CpuTopology()
+    except:
+        pass
+    if cpu_topology == None:
+        print("WAKEUP_SCOPE_SIZE : ", WAKEUP_SCOPE_SIZE)
     print("OFFLINE_CPUS : ", OFFLINE_CPUS)
     print("NR_CPUS : ", NR_CPUS)
     print("============================Starting perf-script===========================\n")
